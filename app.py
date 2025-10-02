@@ -16,56 +16,67 @@ ydl_opts = {
     ],
     "outtmpl": "downloads/%(title)s.%(ext)s",
     "noplaylist": True,
-    "cachedir": False,
-    "quiet": True,
-    "extractaudio": True,
 }
 
 
 @app.route("/", methods=["GET", "POST"])
 def index():
+    info = None
     if request.method == "POST":
-        url = request.form["url"]
         action = request.form.get("action")
-        try:
-            downloads_dir = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "downloads"
-            )
-            if not os.path.exists(downloads_dir):
-                os.makedirs(downloads_dir)
-            if action == "convert":
+        url = request.form["url"]
+        if action == "convert":
+            try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(url, download=False)
-                session["video_info"] = {
+                # sla info op in session
+                session["info"] = {
                     "id": info.get("id"),
                     "title": info.get("title"),
                     "thumbnail": info.get("thumbnail"),
                     "url": url,
-                    "ext": info.get("ext", "webm"),
                 }
-                return render_template("home.html", info=info)
-            elif action == "download":
-                info = session.get("video_info")
-                if not info:
-                    flash("Geen video-informatie gevonden. Probeer opnieuw.", "danger")
-                    return redirect("/")
+                return render_template("home.html", info=session["info"])
+            except Exception as e:
+                flash(f"Fout: {str(e)}", "danger")
+                return redirect("/")
+        elif action == "download":
+            # haal info uit session
+            info = session.get("info")
+            if not info:
+                flash("Geen video-informatie gevonden. Probeer opnieuw.", "danger")
+                return redirect("/")
+            try:
+                downloads_dir = os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)), "downloads"
+                )
+                if not os.path.exists(downloads_dir):
+                    os.makedirs(downloads_dir)
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info_dl = ydl.extract_info(info["url"])
                     ydl.download([info["url"]])
-                    filename = os.path.join("downloads", f"{info['title']}.mp3")
-                    abs_filename = os.path.abspath(filename)
+                filename = (
+                    ydl.prepare_filename(info_dl)
+                    .replace(".webm", ".mp3")
+                    .replace(".m4a", ".mp3")
+                )
+                abs_filename = os.path.abspath(filename)
                 if not os.path.exists(abs_filename):
-                    flash("Download is mislukt.", "danger")
+                    flash("Download is mislukt. Bestand niet gevonden.", "danger")
+                    session.pop("info", None)  # info wissen bij fout
                     return redirect("/")
-                response = send_file(abs_filename, as_attachment=True)
-                try:
-                    os.remove(abs_filename)
-                except Exception:
-                    pass
-                return response
-        except Exception as e:
-            flash(f"Fout: {str(e)}", "danger")
-            return redirect("/")
-    return render_template("home.html")
+                session.pop("info", None)  # info wissen na download
+                return send_file(abs_filename, as_attachment=True)
+            except Exception as e:
+                flash(f"Fout: {str(e)}", "danger")
+                session.pop("info", None)  # info wissen bij fout
+                return redirect("/")
+    else:
+        session.pop("info", None)  # info wissen bij GET
+
+    if "info" in session:
+        info = session["info"]
+    return render_template("home.html", info=info)
 
 
 if __name__ == "__main__":
